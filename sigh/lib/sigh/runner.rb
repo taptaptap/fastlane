@@ -71,8 +71,13 @@ module Sigh
       chunk = Sigh.config[:provisioning_name]
 
       profiles.find_all do | profile|
-        valid = (Sigh.config[:app_identifier_is_prefix] && profile.app.bundle_id.start_with?(bundle_id)) || false
-        valid = (valid && Sigh.config[:provisioning_name_is_chunk] && profile.name.include?(chunk)) || false
+        valid = false
+        if bundle_id && Sigh.config[:app_identifier_is_prefix]
+          valid ||= profile.app.bundle_id.start_with?(bundle_id)
+        end
+        if chunk && Sigh.config[:provisioning_name_is_chunk]
+          valid ||= profile.name.include?(chunk)
+        end
         valid
       end
     end
