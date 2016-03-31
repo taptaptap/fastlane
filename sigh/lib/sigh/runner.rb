@@ -122,7 +122,8 @@ module Sigh
 
     # Create a new profile and return it
     def create_profile!
-      raise "do not create profiles"
+      UI.important('Profile creation is disabled. Contact your administrator.')
+      raise 'Profile creation is disabled. Contact your administrator.'
       cert = certificate_to_use
       bundle_id = Sigh.config[:app_identifier]
       name = Sigh.config[:provisioning_name] || [bundle_id, profile_type.pretty_type].join(' ')
