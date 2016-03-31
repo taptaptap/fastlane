@@ -5,7 +5,7 @@ module Sigh
     attr_accessor :spaceship
 
     # Uses the spaceship to create or download a provisioning profile
-    # returns the path the newly created provisioning profile (in /tmp usually)
+    # returns the paths of the newly created provisioning profile (in /tmp usually)
     def run
       FastlaneCore::PrintTable.print_values(config: Sigh.config,
                                          hide_keys: [:output_path],
@@ -19,10 +19,17 @@ module Sigh
       profiles = [] if Sigh.config[:skip_fetch_profiles]
       profiles ||= fetch_profiles # download the profile if it's there
 
-      if profiles.count > 0
+      if profiles.count == 0
+        UI.important "No existing profiles found, that match the certificates you have installed locally! Creating a new provisioning profile for you"
+        ensure_app_exists!
+        profile = create_profile!
+        profiles = [profile]
+      else
         UI.success "Found #{profiles.count} matching profile(s)"
-        profile = profiles.first
+      end
 
+      tuples = []
+      profiles.each do |profile|
         if Sigh.config[:force]
           if profile_type == Spaceship.provisioning_profile::AppStore or profile_type == Spaceship.provisioning_profile::InHouse
             UI.important "Updating the provisioning profile"
@@ -30,24 +37,20 @@ module Sigh
             UI.important "Updating the profile to include all devices"
             profile.devices = Spaceship.device.all_for_profile_type(profile.type)
           end
-
           profile = profile.update! # assign it, as it's a new profile
         end
-      else
-        UI.important "No existing profiles found, that match the certificates you have installed locally! Creating a new provisioning profile for you"
-        ensure_app_exists!
-        profile = create_profile!
+
+        UI.user_error!("Something went wrong fetching the latest profile") unless profile
+
+        if profile_type == Spaceship.provisioning_profile.in_house
+          ENV["SIGH_PROFILE_ENTERPRISE"] = "1"
+        else
+          ENV.delete("SIGH_PROFILE_ENTERPRISE")
+        end
+        tuples << ProfileWithPath.new(profile, download_profile(profile))
       end
 
-      UI.user_error!("Something went wrong fetching the latest profile") unless profile
-
-      if profile_type == Spaceship.provisioning_profile.in_house
-        ENV["SIGH_PROFILE_ENTERPRISE"] = "1"
-      else
-        ENV.delete("SIGH_PROFILE_ENTERPRISE")
-      end
-
-      return download_profile(profile)
+      return tuples
     end
 
     # The kind of provisioning profile we're interested in
@@ -62,10 +65,26 @@ module Sigh
       @profile_type
     end
 
+    # Filter profiles using the current configuration
+    def filter_profiles(profiles)
+      bundle_id = Sigh.config[:app_identifier]
+      chunk = Sigh.config[:provisioning_name]
+
+      profiles.find_all do | profile|
+        valid = (Sigh.config[:app_identifier_is_prefix] && profile.app.bundle_id.start_with?(bundle_id)) || false
+        valid = (valid && Sigh.config[:provisioning_name_is_chunk] && profile.name.include?(chunk)) || false
+        valid
+      end
+    end
+
     # Fetches a profile matching the user's search requirements
     def fetch_profiles
       UI.message "Fetching profiles..."
-      results = profile_type.find_by_bundle_id(Sigh.config[:app_identifier]).find_all(&:valid?)
+      if Sigh.config[:app_identifier_is_prefix] || Sigh.config[:provisioning_name_is_chunk]
+        results =  filter_profiles(profile_type.all().find_all(&:valid?))
+      else
+        results = profile_type.find_by_bundle_id(Sigh.config[:app_identifier]).find_all(&:valid?)
+      end
 
       # Take the provisioning profile name into account
       if Sigh.config[:provisioning_name].to_s.length > 0
@@ -98,6 +117,7 @@ module Sigh
 
     # Create a new profile and return it
     def create_profile!
+      raise "do not create profiles"
       cert = certificate_to_use
       bundle_id = Sigh.config[:app_identifier]
       name = Sigh.config[:provisioning_name] || [bundle_id, profile_type.pretty_type].join(' ')
@@ -175,7 +195,7 @@ module Sigh
     # Downloads and stores the provisioning profile
     def download_profile(profile)
       UI.important "Downloading provisioning profile..."
-      profile_name ||= "#{profile.class.pretty_type}_#{Sigh.config[:app_identifier]}.mobileprovision" # default name
+      profile_name ||= "#{profile.class.pretty_type}_#{profile.app.bundle_id}.mobileprovision" # default name
       profile_name += '.mobileprovision' unless profile_name.include? 'mobileprovision'
 
       tmp_path = Dir.mktmpdir("profile_download")
